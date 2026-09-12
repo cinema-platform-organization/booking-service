@@ -15,8 +15,8 @@ import {
 import { Seat } from "@cinema-platform/contracts/gen/ts/seat";
 import { Injectable } from "@nestjs/common";
 import { RpcException } from "@nestjs/microservices";
+import { PinoLogger } from "nestjs-pino";
 import QRCode from "qrcode";
-import { lastValueFrom } from "rxjs";
 
 import { HallClientGrpc } from "@/clients/hall-client.grpc";
 import { MovieClientGrpc } from "@/clients/movie-client.grpc";
@@ -42,13 +42,16 @@ type OrderWithTickets = Order & { tickets: Ticket[] };
 @Injectable()
 export class BookingService {
 	public constructor(
+		private readonly logger: PinoLogger,
 		private readonly bookingRepository: BookingRepository,
 		private readonly theaterClient: TheaterClientGrpc,
 		private readonly hallClient: HallClientGrpc,
 		private readonly seatClient: SeatClientGrpc,
 		private readonly movieClient: MovieClientGrpc,
 		private readonly screeningClient: ScreeningClientGrpc,
-	) {}
+	) {
+		this.logger.setContext(BookingService.name);
+	}
 
 	public async getUserBookings(data: GetUserBookingsRequest) {
 		const { userId } = data;
@@ -68,9 +71,10 @@ export class BookingService {
 	public async createReservation(data: CreateReservationRequest) {
 		const { userId, screeningId, seats } = data;
 
-		const { screening } = await lastValueFrom(
-			this.screeningClient.getById({ id: screeningId }),
-		);
+		const response = await this.screeningClient.getById({
+			id: screeningId,
+		});
+		const screening = response.screening;
 
 		if (!screening) {
 			throw new RpcException({
@@ -232,8 +236,8 @@ export class BookingService {
 				return {
 					id: order.id,
 					screeningDate: new Date(screening.startAt)
-                        .toISOString()
-                        .split('T')[0],
+						.toISOString()
+						.split("T")[0],
 					screeningTime: new Date(
 						screening.startAt,
 					).toLocaleTimeString("uk-UA", {
@@ -252,10 +256,17 @@ export class BookingService {
 
 	private async getScreening(id: string, ctx: RequestContext) {
 		if (!ctx.screenings.has(id)) {
-			const { screening } = await lastValueFrom(
-				this.screeningClient.getById({ id }),
-			);
-			ctx.screenings.set(id, screening);
+			try {
+				const { screening } = await this.screeningClient.getById({
+					id,
+				});
+				ctx.screenings.set(id, screening);
+			} catch (error) {
+				if (error instanceof RpcException) {
+					throw error;
+				}
+				ctx.screenings.set(id, undefined);
+			}
 		}
 
 		return ctx.screenings.get(id);
@@ -266,20 +277,30 @@ export class BookingService {
 			return null;
 		}
 		if (!ctx.movies.has(id)) {
-			const { movie } = await lastValueFrom(
-				this.movieClient.getById({ id }),
-			);
-			ctx.movies.set(id, movie);
+			try {
+				const { movie } = await this.movieClient.getById({ id });
+				ctx.movies.set(id, movie);
+			} catch (error) {
+				if (error instanceof RpcException) {
+					throw error;
+				}
+				ctx.movies.set(id, undefined);
+			}
 		}
 		return ctx.movies.get(id);
 	}
 
 	private async getHall(id: string, ctx: RequestContext) {
 		if (!ctx.halls.has(id)) {
-			const { hall } = await lastValueFrom(
-				this.hallClient.getById({ id }),
-			);
-			ctx.halls.set(id, hall);
+			try {
+				const { hall } = await this.hallClient.getById({ id });
+				ctx.halls.set(id, hall);
+			} catch (error) {
+				if (error instanceof RpcException) {
+					throw error;
+				}
+				ctx.halls.set(id, undefined);
+			}
 		}
 
 		return ctx.halls.get(id);
@@ -290,10 +311,15 @@ export class BookingService {
 			return null;
 		}
 		if (!ctx.theaters.has(id)) {
-			const { theater } = await lastValueFrom(
-				this.theaterClient.getById({ id }),
-			);
-			ctx.theaters.set(id, theater);
+			try {
+				const { theater } = await this.theaterClient.getById({ id });
+				ctx.theaters.set(id, theater);
+			} catch (error) {
+				if (error instanceof RpcException) {
+					throw error;
+				}
+				ctx.theaters.set(id, undefined);
+			}
 		}
 
 		return ctx.theaters.get(id);
@@ -301,10 +327,15 @@ export class BookingService {
 
 	private async getSeat(id: string, ctx: RequestContext) {
 		if (!ctx.seats.has(id)) {
-			const { seat } = await lastValueFrom(
-				this.seatClient.getById({ id }),
-			);
-			ctx.seats.set(id, seat);
+			try {
+				const { seat } = await this.seatClient.getById({ id });
+				ctx.seats.set(id, seat);
+			} catch (error) {
+				if (error instanceof RpcException) {
+					throw error;
+				}
+				ctx.seats.set(id, undefined);
+			}
 		}
 
 		return ctx.seats.get(id);
