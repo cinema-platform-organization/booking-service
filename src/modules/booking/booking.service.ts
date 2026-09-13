@@ -56,16 +56,26 @@ export class BookingService {
 	public async getUserBookings(data: GetUserBookingsRequest) {
 		const { userId } = data;
 
-		const orders = await this.bookingRepository.findUserPaidOrders(userId);
+		const limit = data.limit && data.limit > 0 ? data.limit : 20;
+		const page = data.page && data.page > 0 ? data.page : 1;
+		const offset = (page - 1) * limit;
+
+		const orders = await this.bookingRepository.findUserPaidOrders(
+			userId,
+			limit,
+			offset,
+		);
 
 		if (!orders.length) {
-			return { bookings: [] };
+			return { bookings: [], total: 0 };
 		}
+
+		const total = orders[0].total_count;
 
 		const context = this.createRequestContext();
 		const bookings = await this.enrichOrders(orders, context);
 
-		return { bookings };
+		return { bookings, total };
 	}
 
 	public async createReservation(data: CreateReservationRequest) {

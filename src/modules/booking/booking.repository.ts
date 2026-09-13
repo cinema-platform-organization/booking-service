@@ -14,10 +14,10 @@ import { Ticket } from "./interfaces/ticket-interface";
 export class BookingRepository {
 	public constructor(private readonly database: DatabaseService) {}
 
-	public findUserPaidOrders(userId: string) {
-		return this.database.raw<Order>(
+	public findUserPaidOrders(userId: string, limit: number, offset: number) {
+		return this.database.raw<Order & { total_count: number }>(
 			ORDER_QUERIES.FIND_PAID_ORDERS_FOR_USER,
-			[userId],
+			[userId, limit, offset],
 		);
 	}
 
