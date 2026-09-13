@@ -3,7 +3,28 @@ import * as fs from "fs";
 import * as path from "path";
 import postgres from "postgres";
 
-dotenv.config();
+const isProduction = process.env.NODE_ENV === "production";
+
+if (!isProduction) {
+	const envName = process.env.NODE_ENV || "development";
+	const envFileName = `.env.${envName}.local`;
+	const envPath = path.resolve(process.cwd(), envFileName);
+
+	if (fs.existsSync(envPath)) {
+		dotenv.config({ path: envPath });
+		console.log(`[Migration] Loaded environment from ${envFileName}`);
+	} else {
+		const fallbackPath = path.resolve(process.cwd(), ".env");
+		if (fs.existsSync(fallbackPath)) {
+			dotenv.config({ path: fallbackPath });
+			console.log(`[Migration] Loaded fallback environment from .env`);
+		}
+	}
+} else {
+	console.log(
+		"[Migration] Running in production. Using environment variables injected by Docker.",
+	);
+}
 
 const sql = postgres({
 	host: process.env.DATABASE_HOST,
@@ -27,6 +48,12 @@ async function main() {
     `);
 
 	const dir = path.resolve(process.cwd(), "migrations");
+	if (!fs.existsSync(dir)) {
+		console.log("No migrations directory found, skipping.");
+		await sql.end();
+		process.exit(0);
+	}
+
 	const files = fs.readdirSync(dir).sort();
 
 	const applied = await sql<
@@ -47,9 +74,7 @@ async function main() {
 
 		try {
 			await sql.unsafe(content);
-
 			await sql`INSERT INTO migrations (name) VALUES (${file})`;
-
 			console.log("Migration applied: ", file);
 		} catch (error) {
 			console.error("Migration failed: ", error);
