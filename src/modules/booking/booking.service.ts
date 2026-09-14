@@ -177,6 +177,37 @@ export class BookingService {
 			});
 		}
 
+		const ticket = order.tickets[0];
+
+		if (!ticket) {
+			throw new RpcException({
+				code: RpcStatus.FAILED_PRECONDITION,
+				details: "Order has no tickets",
+			});
+		}
+
+		const { screening } = await this.screeningClient.getById({
+			id: ticket.screening_id,
+		});
+
+		if (!screening) {
+			throw new RpcException({
+				code: RpcStatus.NOT_FOUND,
+				details: "Screening not found",
+			});
+		}
+
+		const refundCutoffMs = 2 * 60 * 60 * 1000; // 2 hours before screening
+		const startsAt = new Date(screening.startAt).getTime();
+
+		if (startsAt - Date.now() < refundCutoffMs) {
+			throw new RpcException({
+				code: RpcStatus.FAILED_PRECONDITION,
+				details:
+					"Cancellations are not allowed this close to the screening",
+			});
+		}
+
 		await this.bookingRepository.cancelOrder(bookingId);
 		await this.bookingRepository.deleteTicketsByOrderId(bookingId);
 
