@@ -3,6 +3,7 @@ import type {
 	CancelBookingRequest,
 	ConfirmBookingRequest,
 	CreateReservationRequest,
+	ExistsForScreeningRequest,
 	GetUserBookingsRequest,
 	ListReservedSeatsRequest,
 } from "@cinema-platform/contracts/gen/ts/booking";
@@ -380,5 +381,13 @@ export class BookingService {
 		}
 
 		return ctx.seats.get(id);
+	}
+
+	public async existsForScreening(data: ExistsForScreeningRequest) {
+		const exists = await this.bookingRepository.existsForScreening(
+			data.screeningId,
+		);
+
+		return { exists };
 	}
 }

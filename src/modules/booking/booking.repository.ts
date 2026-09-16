@@ -100,4 +100,13 @@ export class BookingRepository {
 			[hallId, screeningId],
 		);
 	}
+
+	public async existsForScreening(screeningId: string): Promise<boolean> {
+		const rows = await this.database.raw<Record<string, unknown>>(
+			TICKET_QUERIES.EXISTS_FOR_SCREENING,
+			[screeningId],
+		);
+
+		return rows.length > 0;
+	}
 }

@@ -12,4 +12,7 @@ export const TICKET_QUERIES = {
           AND screening_id=$2
           AND status IN ('RESERVED','PAID')
     `,
+	EXISTS_FOR_SCREENING: `
+		SELECT 1 FROM tickets WHERE screening_id = $1 LIMIT 1
+	`,
 } as const;

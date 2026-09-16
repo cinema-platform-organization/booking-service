@@ -2,6 +2,7 @@ import type {
 	CancelBookingRequest,
 	ConfirmBookingRequest,
 	CreateReservationRequest,
+	ExistsForScreeningRequest,
 	GetUserBookingsRequest,
 	ListReservedSeatsRequest,
 } from "@cinema-platform/contracts/gen/ts/booking";
@@ -37,5 +38,10 @@ export class BookingController {
 	@GrpcMethod("BookingService", "ListReservedSeats")
 	public async listReservedSeats(data: ListReservedSeatsRequest) {
 		return this.bookingService.listReservedSeats(data);
+	}
+
+	@GrpcMethod("BookingService", "ExistsForScreening")
+	public async existsForScreening(data: ExistsForScreeningRequest) {
+		return this.bookingService.existsForScreening(data);
 	}
 }
