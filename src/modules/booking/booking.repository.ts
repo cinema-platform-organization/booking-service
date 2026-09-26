@@ -60,6 +60,13 @@ export class BookingRepository {
 		return rows[0] ?? null;
 	}
 
+	public async findTicketsByOrderId(orderId: string) {
+		return this.database.raw<Ticket>(
+			TICKET_QUERIES.FIND_TICKETS_BY_ORDER_ID,
+			[orderId],
+		);
+	}
+
 	public async createTicket(
 		input: Pick<
 			Ticket,

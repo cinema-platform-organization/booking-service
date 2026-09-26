@@ -15,4 +15,9 @@ export const TICKET_QUERIES = {
 	EXISTS_FOR_SCREENING: `
 		SELECT 1 FROM tickets WHERE screening_id = $1 LIMIT 1
 	`,
+	FIND_TICKETS_BY_ORDER_ID: `
+		SELECT *
+		FROM tickets
+		WHERE order_id=$1
+	`,
 } as const;

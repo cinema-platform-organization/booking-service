@@ -178,7 +178,9 @@ export class BookingService {
 			});
 		}
 
-		const ticket = order.tickets[0];
+		const tickets =
+			await this.bookingRepository.findTicketsByOrderId(bookingId);
+		const ticket = tickets[0];
 
 		if (!ticket) {
 			throw new RpcException({
