@@ -9,19 +9,22 @@ export function createGrpcServer(app: INestApplication, config: ConfigService) {
 
 	const url = `${host}:${port}`;
 
-	app.connectMicroservice<MicroserviceOptions>({
-		transport: Transport.GRPC,
-		options: {
-			package: ["booking.v1"],
-			protoPath: [PROTO_PATHS.BOOKING],
-			url,
-			loader: {
-				keepCase: false,
-				longs: String,
-				enums: String,
-				defaults: true,
-				oneofs: true,
+	app.connectMicroservice<MicroserviceOptions>(
+		{
+			transport: Transport.GRPC,
+			options: {
+				package: ["booking.v1"],
+				protoPath: [PROTO_PATHS.BOOKING],
+				url,
+				loader: {
+					keepCase: false,
+					longs: String,
+					enums: String,
+					defaults: true,
+					oneofs: true,
+				},
 			},
 		},
-	});
+		{ inheritAppConfig: true },
+	);
 }
