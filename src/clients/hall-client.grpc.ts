@@ -1,24 +1,21 @@
-import { RpcStatus } from "@cinema-platform/common";
+import { toRpcException } from "@cinema-platform/common";
 import type {
 	GetHallRequest,
 	HallServiceClient,
 } from "@cinema-platform/contracts/gen/ts/hall";
-import { Inject, Injectable, type OnModuleInit } from "@nestjs/common";
+import { Inject, Injectable, Logger, type OnModuleInit } from "@nestjs/common";
 import type { ClientGrpc } from "@nestjs/microservices";
-import { RpcException } from "@nestjs/microservices";
-import { PinoLogger } from "nestjs-pino";
 import { lastValueFrom } from "rxjs";
 
 @Injectable()
 export class HallClientGrpc implements OnModuleInit {
+	private readonly logger = new Logger(HallClientGrpc.name);
+
 	private hallService!: HallServiceClient;
 
 	public constructor(
-		private readonly logger: PinoLogger,
 		@Inject("HALL_PACKAGE") private readonly client: ClientGrpc,
-	) {
-		this.logger.setContext(HallClientGrpc.name);
-	}
+	) {}
 
 	public onModuleInit() {
 		this.hallService =
@@ -29,15 +26,12 @@ export class HallClientGrpc implements OnModuleInit {
 		try {
 			return await lastValueFrom(this.hallService.getHall(data));
 		} catch (error) {
-			if (error instanceof RpcException) {
-				throw error;
-			}
+			this.logger.error(
+				{ err: error as Error, hallId: data.id },
+				"Failed to fetch hall",
+			);
 
-			this.logger.error("Failed to fetch hall:", error);
-			throw new RpcException({
-				code: RpcStatus.INTERNAL,
-				details: "Failed to fetch hall details",
-			});
+			throw toRpcException(error, "Failed to fetch hall details");
 		}
 	}
 }

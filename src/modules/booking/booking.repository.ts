@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { nanoid } from "nanoid";
+import type { TransactionSql } from "postgres";
 
 import { DatabaseService } from "@/infrastructure/database/database.service";
 import { ORDER_COMMANDS } from "@/infrastructure/sql/commands/order.commands";
@@ -14,6 +15,10 @@ import { Ticket } from "./interfaces/ticket-interface";
 export class BookingRepository {
 	public constructor(private readonly database: DatabaseService) {}
 
+	public transaction<T>(fn: (tx: TransactionSql) => Promise<T>) {
+		return this.database.transaction(fn);
+	}
+
 	public findUserPaidOrders(userId: string, limit: number, offset: number) {
 		return this.database.raw<Order & { total_count: number }>(
 			ORDER_QUERIES.FIND_PAID_ORDERS_FOR_USER,
@@ -21,17 +26,28 @@ export class BookingRepository {
 		);
 	}
 
-	public async createOrder(input: Pick<Order, "user_id" | "amount">) {
+	public async createOrder(
+		input: Pick<Order, "user_id" | "amount">,
+		tx?: TransactionSql,
+	) {
 		const rows = await this.database.raw<Order>(
 			ORDER_COMMANDS.CREATE_ORDER,
 			[nanoid(), input.user_id, input.amount],
+			tx,
 		);
 
 		return rows[0];
 	}
 
-	public async markOrderPaid(orderId: string) {
-		await this.database.raw(ORDER_COMMANDS.SET_ORDER_PAID, [orderId]);
+	/** Returns the number of updated orders (0 if the order doesn't exist). */
+	public async markOrderPaid(orderId: string, tx?: TransactionSql) {
+		const result = await this.database.raw(
+			ORDER_COMMANDS.SET_ORDER_PAID,
+			[orderId],
+			tx,
+		);
+
+		return result.count;
 	}
 
 	public async updateOrderQr(orderId: string, qrCode: string | null) {
@@ -51,10 +67,15 @@ export class BookingRepository {
 		await this.database.raw(ORDER_COMMANDS.CANCEL_ORDER, [orderId]);
 	}
 
-	public async findExistingTicket(screeningId: string, seatId: string) {
+	public async findExistingTicket(
+		screeningId: string,
+		seatId: string,
+		tx?: TransactionSql,
+	) {
 		const rows = await this.database.raw<Ticket>(
 			TICKET_QUERIES.FIND_EXISTING_TICKET,
 			[screeningId, seatId],
+			tx,
 		);
 
 		return rows[0] ?? null;
@@ -72,6 +93,7 @@ export class BookingRepository {
 			Ticket,
 			"screening_id" | "hall_id" | "seat_id" | "price" | "order_id"
 		>,
+		tx?: TransactionSql,
 	) {
 		const rows = await this.database.raw<Ticket>(
 			TICKET_COMMANDS.CREATE_TICKET,
@@ -83,16 +105,24 @@ export class BookingRepository {
 				input.price,
 				input.order_id,
 			],
+			tx,
 		);
 
 		return rows[0];
 	}
 
-	public async markTicketsPaid(input: Pick<Ticket, "order_id" | "paid_at">) {
-		await this.database.raw(TICKET_COMMANDS.MARK_TICKETS_PAID, [
-			input.paid_at,
-			input.order_id,
-		]);
+	/** Returns the number of updated tickets. */
+	public async markTicketsPaid(
+		input: Pick<Ticket, "order_id" | "paid_at">,
+		tx?: TransactionSql,
+	) {
+		const result = await this.database.raw(
+			TICKET_COMMANDS.MARK_TICKETS_PAID,
+			[input.paid_at, input.order_id],
+			tx,
+		);
+
+		return result.count;
 	}
 
 	public async deleteTicketsByOrderId(orderId: string) {

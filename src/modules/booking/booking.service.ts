@@ -1,4 +1,4 @@
-import { RpcStatus } from "@cinema-platform/common";
+import { isGrpcError, RpcStatus } from "@cinema-platform/common";
 import type {
 	CancelBookingRequest,
 	ConfirmBookingRequest,
@@ -14,9 +14,8 @@ import {
 	Theater,
 } from "@cinema-platform/contracts/gen/ts/screening";
 import { Seat } from "@cinema-platform/contracts/gen/ts/seat";
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { RpcException } from "@nestjs/microservices";
-import { PinoLogger } from "nestjs-pino";
 import QRCode from "qrcode";
 
 import { HallClientGrpc } from "@/clients/hall-client.grpc";
@@ -40,19 +39,34 @@ interface RequestContext {
 
 type OrderWithTickets = Order & { tickets: Ticket[] };
 
+// Screenings happen in Kyiv, so dates and times are shown in Kyiv time
+// regardless of the container's time zone (UTC in Docker)
+const KYIV_DATE = new Intl.DateTimeFormat("en-CA", {
+	timeZone: "Europe/Kyiv",
+	year: "numeric",
+	month: "2-digit",
+	day: "2-digit",
+}); // en-CA formats as YYYY-MM-DD
+
+const KYIV_TIME = new Intl.DateTimeFormat("uk-UA", {
+	timeZone: "Europe/Kyiv",
+	hour: "2-digit",
+	minute: "2-digit",
+	hourCycle: "h23",
+}); // HH:mm, 24-hour
+
 @Injectable()
 export class BookingService {
+	private readonly logger = new Logger(BookingService.name);
+
 	public constructor(
-		private readonly logger: PinoLogger,
 		private readonly bookingRepository: BookingRepository,
 		private readonly theaterClient: TheaterClientGrpc,
 		private readonly hallClient: HallClientGrpc,
 		private readonly seatClient: SeatClientGrpc,
 		private readonly movieClient: MovieClientGrpc,
 		private readonly screeningClient: ScreeningClientGrpc,
-	) {
-		this.logger.setContext(BookingService.name);
-	}
+	) {}
 
 	public async getUserBookings(data: GetUserBookingsRequest) {
 		const { userId } = data;
@@ -94,36 +108,145 @@ export class BookingService {
 			});
 		}
 
-		const amount = seats.reduce((s, a) => s + a.price, 0);
+		const hallId = screening.hall?.id;
 
-		const order = await this.bookingRepository.createOrder({
-			user_id: userId,
-			amount,
-		});
+		if (!hallId) {
+			this.logger.error({ screeningId }, "Screening has no hall");
 
-		const tickets = await Promise.all(
-			seats.map(async s => {
-				const existing =
-					await this.bookingRepository.findExistingTicket(
-						screeningId,
-						s.seatId,
-					);
+			throw new RpcException({
+				code: RpcStatus.FAILED_PRECONDITION,
+				details: "Screening has no hall assigned",
+			});
+		}
 
-				if (existing) {
+		if (seats.length === 0) {
+			throw new RpcException({
+				code: RpcStatus.INVALID_ARGUMENT,
+				details: "No seats selected",
+			});
+		}
+
+		const seatIds = seats.map(s => s.seatId);
+		const duplicate = seatIds.find((id, i) => seatIds.indexOf(id) !== i);
+
+		if (duplicate) {
+			throw new RpcException({
+				code: RpcStatus.INVALID_ARGUMENT,
+				details: `Seat ${duplicate} is selected more than once`,
+			});
+		}
+
+		// Prices come from theater-service, never from the client: the price
+		// in the request is ignored. Every seat must exist in the screening's hall.
+		const pricedSeats = await Promise.all(
+			seatIds.map(async seatId => {
+				let seat: Seat | undefined;
+
+				try {
+					({ seat } = await this.seatClient.getById({ id: seatId }));
+				} catch (error) {
+					if (this.isNotFound(error)) {
+						throw new RpcException({
+							code: RpcStatus.NOT_FOUND,
+							details: `Seat ${seatId} not found`,
+						});
+					}
+					throw error;
+				}
+
+				if (!seat) {
 					throw new RpcException({
-						code: RpcStatus.ALREADY_EXISTS,
-						details: `Seat ${s.seatId} is already taken`,
+						code: RpcStatus.NOT_FOUND,
+						details: `Seat ${seatId} not found`,
 					});
 				}
 
-				return this.bookingRepository.createTicket({
-					screening_id: screening.id,
-					hall_id: screening.hall?.id!,
-					seat_id: s.seatId,
-					price: s.price,
-					order_id: order.id,
-				});
+				if (seat.hallId !== hallId) {
+					this.logger.warn(
+						{
+							userId,
+							screeningId,
+							seatId,
+							seatHallId: seat.hallId,
+							hallId,
+						},
+						"Seat from another hall in reservation",
+					);
+
+					throw new RpcException({
+						code: RpcStatus.INVALID_ARGUMENT,
+						details: `Seat ${seatId} is not in this screening's hall`,
+					});
+				}
+
+				return { seatId, price: seat.price };
 			}),
+		);
+
+		const amount = pricedSeats.reduce((sum, s) => sum + s.price, 0);
+
+		let result: { order: Order; tickets: Ticket[] };
+
+		try {
+			result = await this.bookingRepository.transaction(async tx => {
+				const order = await this.bookingRepository.createOrder(
+					{ user_id: userId, amount },
+					tx,
+				);
+
+				const tickets: Ticket[] = [];
+
+				for (const s of pricedSeats) {
+					const existing =
+						await this.bookingRepository.findExistingTicket(
+							screeningId,
+							s.seatId,
+							tx,
+						);
+
+					if (existing) {
+						throw new RpcException({
+							code: RpcStatus.ALREADY_EXISTS,
+							details: `Seat ${s.seatId} is already taken`,
+						});
+					}
+
+					tickets.push(
+						await this.bookingRepository.createTicket(
+							{
+								screening_id: screening.id,
+								hall_id: hallId,
+								seat_id: s.seatId,
+								price: s.price,
+								order_id: order.id,
+							},
+							tx,
+						),
+					);
+				}
+
+				return { order, tickets };
+			});
+		} catch (error) {
+			if ((error as { code?: string }).code === "23505") {
+				this.logger.warn(
+					{ userId, screeningId },
+					"Seat taken by a concurrent reservation",
+				);
+
+				throw new RpcException({
+					code: RpcStatus.ALREADY_EXISTS,
+					details: "One of the selected seats is already taken",
+				});
+			}
+			throw error;
+		}
+
+		const { order, tickets } = result;
+
+		this.logger.log(
+			{ orderId: order.id, userId, screeningId, seats: seats.length },
+			"Reservation created",
 		);
 
 		return {
@@ -136,17 +259,46 @@ export class BookingService {
 	public async confirmBooking(data: ConfirmBookingRequest) {
 		const { bookingId } = data;
 
-		await this.bookingRepository.markOrderPaid(bookingId);
+		await this.bookingRepository.transaction(async tx => {
+			const ordersUpdated = await this.bookingRepository.markOrderPaid(
+				bookingId,
+				tx,
+			);
 
-		const now = new Date();
+			if (ordersUpdated === 0) {
+				this.logger.error(
+					{ orderId: bookingId },
+					"Confirm for unknown order",
+				);
 
-		await this.bookingRepository.markTicketsPaid({
-			order_id: bookingId,
-			paid_at: now,
+				throw new RpcException({
+					code: RpcStatus.NOT_FOUND,
+					details: "Order not found",
+				});
+			}
+
+			const ticketsUpdated = await this.bookingRepository.markTicketsPaid(
+				{ order_id: bookingId, paid_at: new Date() },
+				tx,
+			);
+
+			if (ticketsUpdated === 0) {
+				this.logger.error(
+					{ orderId: bookingId },
+					"Confirm for order without tickets",
+				);
+
+				throw new RpcException({
+					code: RpcStatus.FAILED_PRECONDITION,
+					details: "Order has no tickets",
+				});
+			}
 		});
 
 		const qrDataUrl = await QRCode.toDataURL(bookingId);
 		await this.bookingRepository.updateOrderQr(bookingId, qrDataUrl);
+
+		this.logger.log({ orderId: bookingId }, "Booking confirmed");
 
 		return { ok: true };
 	}
@@ -163,6 +315,11 @@ export class BookingService {
 			});
 		}
 		if (order.user_id !== userId) {
+			this.logger.warn(
+				{ orderId: bookingId, userId },
+				"User tried to cancel someone else's booking",
+			);
+
 			throw new RpcException({
 				code: RpcStatus.PERMISSION_DENIED,
 				details: "You have no rights to cancel this booking",
@@ -183,6 +340,11 @@ export class BookingService {
 		const ticket = tickets[0];
 
 		if (!ticket) {
+			this.logger.warn(
+				{ orderId: bookingId },
+				"Paid order has no tickets",
+			);
+
 			throw new RpcException({
 				code: RpcStatus.FAILED_PRECONDITION,
 				details: "Order has no tickets",
@@ -214,6 +376,8 @@ export class BookingService {
 		await this.bookingRepository.cancelOrder(bookingId);
 		await this.bookingRepository.deleteTicketsByOrderId(bookingId);
 
+		this.logger.log({ orderId: bookingId, userId }, "Booking canceled");
+
 		return { ok: true };
 	}
 
@@ -244,10 +408,14 @@ export class BookingService {
 		orders: OrderWithTickets[],
 		ctx: RequestContext,
 	) {
-		return Promise.all(
+		const bookings = await Promise.all(
 			orders.map(async order => {
 				const ticket = order.tickets[0];
 				if (!ticket) {
+					this.logger.warn(
+						{ orderId: order.id },
+						"Paid order has no tickets, skipping",
+					);
 					return null;
 				}
 
@@ -257,6 +425,10 @@ export class BookingService {
 				);
 
 				if (!screening) {
+					this.logger.warn(
+						{ orderId: order.id, screeningId: ticket.screening_id },
+						"Screening not found for order, skipping",
+					);
 					return null;
 				}
 
@@ -279,15 +451,12 @@ export class BookingService {
 
 				return {
 					id: order.id,
-					screeningDate: new Date(screening.startAt)
-						.toISOString()
-						.split("T")[0],
-					screeningTime: new Date(
-						screening.startAt,
-					).toLocaleTimeString("uk-UA", {
-						hour: "2-digit",
-						minute: "2-digit",
-					}),
+					screeningDate: KYIV_DATE.format(
+						new Date(screening.startAt),
+					),
+					screeningTime: KYIV_TIME.format(
+						new Date(screening.startAt),
+					),
 					movie,
 					hall,
 					theater,
@@ -296,6 +465,18 @@ export class BookingService {
 				};
 			}),
 		);
+
+		return bookings.filter(
+			(booking): booking is NonNullable<typeof booking> =>
+				booking !== null,
+		);
+	}
+
+	private isNotFound(error: unknown) {
+		const payload =
+			error instanceof RpcException ? error.getError() : error;
+
+		return isGrpcError(payload) && payload.code === RpcStatus.NOT_FOUND;
 	}
 
 	private async getScreening(id: string, ctx: RequestContext) {
@@ -306,7 +487,7 @@ export class BookingService {
 				});
 				ctx.screenings.set(id, screening);
 			} catch (error) {
-				if (error instanceof RpcException) {
+				if (!this.isNotFound(error)) {
 					throw error;
 				}
 				ctx.screenings.set(id, undefined);
@@ -325,7 +506,7 @@ export class BookingService {
 				const { movie } = await this.movieClient.getById({ id });
 				ctx.movies.set(id, movie);
 			} catch (error) {
-				if (error instanceof RpcException) {
+				if (!this.isNotFound(error)) {
 					throw error;
 				}
 				ctx.movies.set(id, undefined);
@@ -340,7 +521,7 @@ export class BookingService {
 				const { hall } = await this.hallClient.getById({ id });
 				ctx.halls.set(id, hall);
 			} catch (error) {
-				if (error instanceof RpcException) {
+				if (!this.isNotFound(error)) {
 					throw error;
 				}
 				ctx.halls.set(id, undefined);
@@ -359,7 +540,7 @@ export class BookingService {
 				const { theater } = await this.theaterClient.getById({ id });
 				ctx.theaters.set(id, theater);
 			} catch (error) {
-				if (error instanceof RpcException) {
+				if (!this.isNotFound(error)) {
 					throw error;
 				}
 				ctx.theaters.set(id, undefined);
@@ -375,7 +556,7 @@ export class BookingService {
 				const { seat } = await this.seatClient.getById({ id });
 				ctx.seats.set(id, seat);
 			} catch (error) {
-				if (error instanceof RpcException) {
+				if (!this.isNotFound(error)) {
 					throw error;
 				}
 				ctx.seats.set(id, undefined);

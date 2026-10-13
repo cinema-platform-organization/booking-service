@@ -5,7 +5,7 @@ import {
 	type OnModuleDestroy,
 	type OnModuleInit,
 } from "@nestjs/common";
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 
 import { PG } from "./database.constants";
 
@@ -25,9 +25,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
 			const ms = Date.now() - start;
 
-			this.logger.log(`Database connection established (time=${ms}ms)`);
+			this.logger.log({ ms }, "Database connection established");
 		} catch (error) {
-			this.logger.error("Failed to connect to database: ", error);
+			this.logger.error(
+				{ err: error as Error },
+				"Failed to connect to database",
+			);
 
 			throw error;
 		}
@@ -41,7 +44,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
 			this.logger.log("Database connection closed");
 		} catch (error) {
-			this.logger.error("Failed to disconnect from database: ", error);
+			this.logger.error(
+				{ err: error as Error },
+				"Failed to disconnect from database",
+			);
 		}
 	}
 
@@ -49,7 +55,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 		return this.sql(strings, ...values);
 	}
 
-	public raw<T = any>(query: string, params: any[] = []) {
-		return this.sql.unsafe<T[]>(query, params);
+	public raw<T = any>(
+		query: string,
+		params: any[] = [],
+		tx?: TransactionSql,
+	) {
+		return (tx ?? this.sql).unsafe<T[]>(query, params);
+	}
+
+	public async transaction<T>(fn: (tx: TransactionSql) => Promise<T>) {
+		return (await this.sql.begin(fn)) as T;
 	}
 }
