@@ -39,7 +39,6 @@ export class BookingRepository {
 		return rows[0];
 	}
 
-	/** Returns the number of updated orders (0 if the order doesn't exist). */
 	public async markOrderPaid(orderId: string, tx?: TransactionSql) {
 		const result = await this.database.raw(
 			ORDER_COMMANDS.SET_ORDER_PAID,
@@ -111,7 +110,6 @@ export class BookingRepository {
 		return rows[0];
 	}
 
-	/** Returns the number of updated tickets. */
 	public async markTicketsPaid(
 		input: Pick<Ticket, "order_id" | "paid_at">,
 		tx?: TransactionSql,

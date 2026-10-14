@@ -19,8 +19,7 @@
 		"test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
 		"test:e2e": "jest --config ./test/jest-e2e.json",
 		"migrate:make": "ts-node ./scripts/make-migration.ts",
-		"migrate:up": "ts-node ./scripts/migration-runner.ts",
-		"db:seed": "node -r tsconfig-paths/register -r ts-node/register src/infrastructure/database/seed.ts"
+		"migrate:up": "ts-node ./scripts/migration-runner.ts"
 	},
 	"dependencies": {
 		"@cinema-platform/common": "^1.3.2",

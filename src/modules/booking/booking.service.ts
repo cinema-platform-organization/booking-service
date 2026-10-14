@@ -39,21 +39,11 @@ interface RequestContext {
 
 type OrderWithTickets = Order & { tickets: Ticket[] };
 
-// Screenings happen in Kyiv, so dates and times are shown in Kyiv time
-// regardless of the container's time zone (UTC in Docker)
-const KYIV_DATE = new Intl.DateTimeFormat("en-CA", {
-	timeZone: "Europe/Kyiv",
-	year: "numeric",
-	month: "2-digit",
-	day: "2-digit",
-}); // en-CA formats as YYYY-MM-DD
+function parseUtc(value: string) {
+	const hasZone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(value);
 
-const KYIV_TIME = new Intl.DateTimeFormat("uk-UA", {
-	timeZone: "Europe/Kyiv",
-	hour: "2-digit",
-	minute: "2-digit",
-	hourCycle: "h23",
-}); // HH:mm, 24-hour
+	return new Date(hasZone ? value : `${value.replace(" ", "T")}Z`);
+}
 
 @Injectable()
 export class BookingService {
@@ -94,7 +84,8 @@ export class BookingService {
 	}
 
 	public async createReservation(data: CreateReservationRequest) {
-		const { userId, screeningId, seats } = data;
+		const { userId, screeningId } = data;
+		const seats = data.seats ?? [];
 
 		const response = await this.screeningClient.getById({
 			id: screeningId,
@@ -136,8 +127,6 @@ export class BookingService {
 			});
 		}
 
-		// Prices come from theater-service, never from the client: the price
-		// in the request is ignored. Every seat must exist in the screening's hall.
 		const pricedSeats = await Promise.all(
 			seatIds.map(async seatId => {
 				let seat: Seat | undefined;
@@ -179,7 +168,7 @@ export class BookingService {
 					});
 				}
 
-				return { seatId, price: seat.price };
+				return { seatId, price: seat.price ?? 0 };
 			}),
 		);
 
@@ -363,7 +352,7 @@ export class BookingService {
 		}
 
 		const refundCutoffMs = 2 * 60 * 60 * 1000; // 2 hours before screening
-		const startsAt = new Date(screening.startAt).getTime();
+		const startsAt = parseUtc(screening.startAt).getTime();
 
 		if (startsAt - Date.now() < refundCutoffMs) {
 			throw new RpcException({
@@ -438,6 +427,8 @@ export class BookingService {
 					this.getTheater(screening.theater?.id, ctx),
 				]);
 
+				const startAt = parseUtc(screening.startAt).toISOString();
+
 				const seats = await Promise.all(
 					order.tickets.map(async t => {
 						const seat = await this.getSeat(t.seat_id, ctx);
@@ -451,12 +442,9 @@ export class BookingService {
 
 				return {
 					id: order.id,
-					screeningDate: KYIV_DATE.format(
-						new Date(screening.startAt),
-					),
-					screeningTime: KYIV_TIME.format(
-						new Date(screening.startAt),
-					),
+					// UTC: "2026-10-15" and "13:00"
+					screeningDate: startAt.slice(0, 10),
+					screeningTime: startAt.slice(11, 16),
 					movie,
 					hall,
 					theater,
